@@ -999,6 +999,9 @@ static void on_pw_stream_process(void * data) {
             return;
         }
 
+        int standalone_dmabuf_import(dmabuf_t * dmabuf);
+        standalone_dmabuf_import(&dmabuf);
+
         if (!dmabuf_to_texture(ctx, &dmabuf)) {
             log_error("mirror-xdg-portal::on_pw_stream_process(): failed to import dmabuf\n");
             pw_stream_queue_buffer(backend->pw_stream, buffer);
