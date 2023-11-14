@@ -490,15 +490,13 @@ void standalone_dmabuf_import_dispatch(standalone_ctx_t * ctx) {
     wl_display_dispatch(ctx->display);
 }
 
-void standalone_dmabuf_import_render(standalone_ctx_t * ctx, dmabuf_t * dmabuf) {
-    eglMakeCurrent(ctx->egl_display, ctx->egl_surface, ctx->egl_surface, ctx->egl_context);
+void standalone_dmabuf_import_to_texture(EGLDisplay egl_display, GLuint egl_texture, dmabuf_t * dmabuf) {
     int i = 0;
     size_t planes = dmabuf->planes;
     EGLAttrib * image_attribs = malloc((6 + 10 * planes + 1) * sizeof (EGLAttrib));
-    ctx->egl_image_attribs = image_attribs;
     if (image_attribs == NULL) {
         printf("[error] failed to allocate EGL image attribs\n");
-        exit_fail(ctx);
+        exit(1);
     }
 
     image_attribs[i++] = EGL_WIDTH;
@@ -533,22 +531,26 @@ void standalone_dmabuf_import_render(standalone_ctx_t * ctx, dmabuf_t * dmabuf) 
 
     printf("[info] import dmabuf\n");
     // create EGLImage from dmabuf with attribute array
-    EGLImage frame_image = eglCreateImage(ctx->egl_display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, ctx->egl_image_attribs);
-    free(ctx->egl_image_attribs);
-    ctx->egl_image_attribs = NULL;
+    EGLImage frame_image = eglCreateImage(egl_display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, image_attribs);
+    free(image_attribs);
 
     if (frame_image == EGL_NO_IMAGE) {
         printf("[error] error = %x\n", eglGetError());
-        exit_fail(ctx);
+        exit(1);
     }
 
     // convert EGLImage to GL texture
-    glBindTexture(GL_TEXTURE_2D, ctx->egl_texture);
+    glBindTexture(GL_TEXTURE_2D, egl_texture);
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, frame_image);
 
     // destroy temporary image
-    eglDestroyImage(ctx->egl_display, frame_image);
+    eglDestroyImage(egl_display, frame_image);
+}
+
+void standalone_dmabuf_import_render(standalone_ctx_t * ctx, dmabuf_t * dmabuf) {
+    eglMakeCurrent(ctx->egl_display, ctx->egl_surface, ctx->egl_surface, ctx->egl_context);
+    standalone_dmabuf_import_to_texture(ctx->egl_display, ctx->egl_texture, dmabuf);
 
     printf("[info] drawing texture\n");
     glBindTexture(GL_TEXTURE_2D, ctx->egl_texture);

@@ -47,6 +47,7 @@ static bool has_extension(const char * extension) {
 struct standalone_ctx;
 struct standalone_ctx * standalone_dmabuf_import_init();
 void standalone_dmabuf_import_dispatch(struct standalone_ctx * ctx);
+void standalone_dmabuf_import_to_texture(EGLDisplay egl_display, GLuint egl_texture, dmabuf_t * dmabuf);
 void standalone_dmabuf_import_render(struct standalone_ctx * ctx, dmabuf_t * dmabuf);
 struct standalone_ctx * standalone;
 
@@ -504,73 +505,8 @@ bool dmabuf_to_texture(ctx_t * ctx, dmabuf_t * dmabuf) {
     standalone_dmabuf_import_dispatch(standalone);
 
     eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
-    if (dmabuf->planes > MAX_PLANES) {
-        log_error("egl::dmabuf_to_texture(): too many planes, got %zd, can support at most %d\n", dmabuf->planes, MAX_PLANES);
-        return false;
-    }
-
-    int i = 0;
-    EGLAttrib * image_attribs = malloc((6 + 10 * dmabuf->planes + 1) * sizeof (EGLAttrib));
-    if (image_attribs == NULL) {
-        log_error("egl::dmabuf_to_texture(): failed to allocate EGL image attribs\n");
-        return false;
-    }
-
-    image_attribs[i++] = EGL_WIDTH;
-    image_attribs[i++] = dmabuf->width;
-    image_attribs[i++] = EGL_HEIGHT;
-    image_attribs[i++] = dmabuf->height;
-    image_attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    image_attribs[i++] = dmabuf->drm_format;
-    log_debug(ctx, "egl::dmabuf_to_texture(): w=%d h=%d drm_format=%c%c%c%c\n",
-        dmabuf->width, dmabuf->height,
-        ((dmabuf->drm_format >> 0) & 0xFF),
-        ((dmabuf->drm_format >> 8) & 0xFF),
-        ((dmabuf->drm_format >> 16) & 0xFF),
-        ((dmabuf->drm_format >> 24) & 0xFF)
-    );
-
-    for (size_t j = 0; j < dmabuf->planes; j++) {
-        image_attribs[i++] = fd_attribs[j];
-        image_attribs[i++] = dmabuf->fds[j];
-        image_attribs[i++] = offset_attribs[j];
-        image_attribs[i++] = dmabuf->offsets[j];
-        image_attribs[i++] = stride_attribs[j];
-        image_attribs[i++] = dmabuf->strides[j];
-        image_attribs[i++] = modifier_low_attribs[j];
-        image_attribs[i++] = (uint32_t)dmabuf->modifier;
-        image_attribs[i++] = modifier_high_attribs[j];
-        image_attribs[i++] = (uint32_t)(dmabuf->modifier >> 32);
-        log_debug(ctx, "egl::dmabuf_to_texture(): fd=% 3d offset=% 10d stride=% 10d modifier=%016lx\n",
-            dmabuf->fds[j], dmabuf->offsets[j], dmabuf->strides[j], dmabuf->modifier
-        );
-    }
-
-    image_attribs[i++] = EGL_NONE;
-
-    log_debug(ctx, "egl::dmabuf_to_texture(): image_attribs=");
-    if (ctx->opt.verbose) {
-        for (i = 0; image_attribs[i] != EGL_NONE; i++) {
-            fprintf(stderr, "%08lx%s", image_attribs[i], image_attribs[i + 1] != EGL_NONE ? "_" : "\n");
-        }
-    }
-
-    // create EGLImage from dmabuf with attribute array
-    EGLImage frame_image = eglCreateImage(ctx->egl.display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, image_attribs);
-    free(image_attribs);
-
-    if (frame_image == EGL_NO_IMAGE) {
-        log_error("egl::dmabuf_to_texture(): failed to create EGL image from dmabuf: error = %x\n", eglGetError());
-        return false;
-    }
-
-    // convert EGLImage to GL texture
-    glBindTexture(GL_TEXTURE_2D, ctx->egl.texture);
-    ctx->egl.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, frame_image);
+    standalone_dmabuf_import_to_texture(ctx->egl.display, ctx->egl.texture, dmabuf);
     ctx->egl.texture_initialized = true;
-
-    // destroy temporary image
-    eglDestroyImage(ctx->egl.display, frame_image);
 
     // set texture size and aspect ratio only if changed
     if (dmabuf->width != ctx->egl.width || dmabuf->height != ctx->egl.height) {
