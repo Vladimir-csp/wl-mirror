@@ -23,7 +23,7 @@
     ((drm_format) >> 16) & 0xff, \
     ((drm_format) >> 24) & 0xff
 
-typedef struct {
+typedef struct standalone_ctx {
     struct wl_display * display;
     struct wl_registry * registry;
 
@@ -51,11 +51,13 @@ typedef struct {
     bool xdg_toplevel_configured;
     bool configured;
     bool closing;
-} ctx_t;
+} standalone_ctx_t;
 
-static void exit_fail(ctx_t * ctx) {
+static void exit_fail(standalone_ctx_t * ctx) {
     exit(1);
 }
+
+static void ignore() {}
 
 // --- wl_registry event handlers ---
 
@@ -63,7 +65,7 @@ static void registry_event_add(
     void * data, struct wl_registry * registry,
     uint32_t id, const char * interface, uint32_t version
 ) {
-    ctx_t * ctx = (ctx_t *)data;
+    standalone_ctx_t * ctx = (standalone_ctx_t *)data;
     printf("[registry][+] id=%08x %s v%d\n", id, interface, version);
 
     if (strcmp(interface, "wl_compositor") == 0) {
@@ -85,19 +87,14 @@ static void registry_event_add(
     }
 }
 
-static void registry_event_remove(
-    void * data, struct wl_registry * registry,
-    uint32_t id
-) {}
-
 static const struct wl_registry_listener registry_listener = {
     .global = registry_event_add,
-    .global_remove = registry_event_remove
+    .global_remove = ignore
 };
 
 // --- configure callbacks ---
 
-static void surface_configure_finished(ctx_t * ctx) {
+static void surface_configure_finished(standalone_ctx_t * ctx) {
     printf("[info] acknowledging configure\n");
     xdg_surface_ack_configure(ctx->xdg_surface, ctx->last_surface_serial);
 
@@ -114,7 +111,7 @@ static void surface_configure_finished(ctx_t * ctx) {
 static void xdg_surface_event_configure(
     void * data, struct xdg_surface * xdg_surface, uint32_t serial
 ) {
-    ctx_t * ctx = (ctx_t *)data;
+    standalone_ctx_t * ctx = (standalone_ctx_t *)data;
     printf("[xdg_surface] configure %d\n", serial);
 
     ctx->last_surface_serial = serial;
@@ -134,8 +131,13 @@ static void xdg_toplevel_event_configure(
     void * data, struct xdg_toplevel * xdg_toplevel,
     int32_t width, int32_t height, struct wl_array * states
 ) {
-    ctx_t * ctx = (ctx_t *)data;
+    standalone_ctx_t * ctx = (standalone_ctx_t *)data;
     printf("[xdg_toplevel] configure width=%d, height=%d\n", width, height);
+
+    wl_egl_window_resize(ctx->egl_window, width, height, 0, 0);
+    glBindTexture(GL_TEXTURE_2D, ctx->egl_texture);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     ctx->xdg_toplevel_configured = true;
     if (ctx->xdg_surface_configured && ctx->xdg_toplevel_configured) {
@@ -146,7 +148,7 @@ static void xdg_toplevel_event_configure(
 static void xdg_toplevel_event_close(
     void * data, struct xdg_toplevel * xdg_toplevel
 ) {
-    ctx_t * ctx = (ctx_t *)data;
+    standalone_ctx_t * ctx = (standalone_ctx_t *)data;
     ctx->closing = true;
 }
 
@@ -226,9 +228,9 @@ static const EGLAttrib modifier_high_attribs[] = {
     EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT
 };
 
-int standalone_dmabuf_import(dmabuf_t * dmabuf) {
+standalone_ctx_t * standalone_dmabuf_import_init() {
     printf("[info] allocating context\n");
-    ctx_t * ctx = malloc(sizeof (ctx_t));
+    standalone_ctx_t * ctx = malloc(sizeof (standalone_ctx_t));
     ctx->display = NULL;
     ctx->registry = NULL;
 
@@ -360,7 +362,7 @@ int standalone_dmabuf_import(dmabuf_t * dmabuf) {
     }
 
     printf("[info] creating EGL window\n");
-    ctx->egl_window = wl_egl_window_create(ctx->surface, dmabuf->width, dmabuf->height);
+    ctx->egl_window = wl_egl_window_create(ctx->surface, 100, 100);
     if (ctx->egl_window == EGL_NO_SURFACE) {
         printf("[!] wl_egl_window: failed to create EGL window\n");
         exit_fail(ctx);
@@ -466,6 +468,30 @@ int standalone_dmabuf_import(dmabuf_t * dmabuf) {
         exit_fail(ctx);
     }
 
+
+    printf("[info] clearing screen\n");
+    glBindTexture(GL_TEXTURE_2D, ctx->egl_texture);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    printf("[info] swapping buffers\n");
+    if (eglSwapBuffers(ctx->egl_display, ctx->egl_surface) != EGL_TRUE) {
+        printf("[!] eglSwapBuffers: failed to swap buffers\n");
+        exit_fail(ctx);
+    }
+
+    printf("[info] committing surface\n");
+    wl_surface_commit(ctx->surface);
+
+    return ctx;
+}
+
+void standalone_dmabuf_import_dispatch(standalone_ctx_t * ctx) {
+    eglMakeCurrent(ctx->egl_display, ctx->egl_surface, ctx->egl_surface, ctx->egl_context);
+    wl_display_dispatch(ctx->display);
+}
+
+void standalone_dmabuf_import_render(standalone_ctx_t * ctx, dmabuf_t * dmabuf) {
+    eglMakeCurrent(ctx->egl_display, ctx->egl_surface, ctx->egl_surface, ctx->egl_context);
     int i = 0;
     size_t planes = dmabuf->planes;
     EGLAttrib * image_attribs = malloc((6 + 10 * planes + 1) * sizeof (EGLAttrib));
@@ -503,7 +529,6 @@ int standalone_dmabuf_import(dmabuf_t * dmabuf) {
 
     image_attribs[i++] = EGL_NONE;
 
-    wl_egl_window_resize(ctx->egl_window, dmabuf->width, dmabuf->height, 0, 0);
     glViewport(0, 0, dmabuf->width, dmabuf->height);
 
     printf("[info] import dmabuf\n");
@@ -538,10 +563,4 @@ int standalone_dmabuf_import(dmabuf_t * dmabuf) {
 
     printf("[info] committing surface\n");
     wl_surface_commit(ctx->surface);
-
-    printf("[info] entering event loop\n");
-    while (wl_display_dispatch(ctx->display) != -1 && !ctx->closing) {}
-    printf("[info] exiting event loop\n");
-
-    exit(1);
 }

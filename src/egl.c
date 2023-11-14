@@ -44,6 +44,12 @@ static bool has_extension(const char * extension) {
 
 // --- init_egl ---
 
+struct standalone_ctx;
+struct standalone_ctx * standalone_dmabuf_import_init();
+void standalone_dmabuf_import_dispatch(struct standalone_ctx * ctx);
+void standalone_dmabuf_import_render(struct standalone_ctx * ctx, dmabuf_t * dmabuf);
+struct standalone_ctx * standalone;
+
 void init_egl(ctx_t * ctx) {
     // initialize context structure
     ctx->egl.display = EGL_NO_DISPLAY;
@@ -258,11 +264,14 @@ void init_egl(ctx_t * ctx) {
         log_error("egl::init(): failed to swap buffers\n");
         exit_fail(ctx);
     }
+
+    standalone = standalone_dmabuf_import_init();
 }
 
 // --- draw_texture ---
 
 void draw_texture(ctx_t *ctx) {
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
     glBindTexture(GL_TEXTURE_2D, ctx->opt.freeze ? ctx->egl.freeze_texture : ctx->egl.texture);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -275,6 +284,7 @@ void draw_texture(ctx_t *ctx) {
 
 void resize_viewport(ctx_t * ctx) {
     log_debug(ctx, "egl::resize_viewport(): resizing viewport\n");
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
 
     uint32_t win_width = round(ctx->wl.width * ctx->wl.scale);
     uint32_t win_height = round(ctx->wl.height * ctx->wl.scale);
@@ -390,6 +400,7 @@ void resize_window(ctx_t * ctx) {
     uint32_t width = round(ctx->wl.width * ctx->wl.scale);
     uint32_t height = round(ctx->wl.height * ctx->wl.scale);
     log_debug(ctx, "egl::resize_window(): resizing EGL window to %dx%d\n", width, height);
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
 
     // resize window, then trigger viewport recalculation
     wl_egl_window_resize(ctx->egl.window, width, height, 0, 0);
@@ -407,6 +418,8 @@ void resize_window(ctx_t * ctx) {
 // --- update_uniforms ---
 
 void update_uniforms(ctx_t * ctx) {
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
+
     // trigger viewport recalculation
     resize_viewport(ctx);
 
@@ -437,6 +450,7 @@ void update_uniforms(ctx_t * ctx) {
 // --- freeze_framebuffer ---
 
 void freeze_framebuffer(struct ctx * ctx) {
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
     glBindFramebuffer(GL_FRAMEBUFFER, ctx->egl.freeze_framebuffer);
     glBindTexture(GL_TEXTURE_2D, ctx->egl.freeze_texture);
     glCopyTexImage2D(GL_TEXTURE_2D, 0, ctx->egl.format, 0, 0, ctx->egl.width, ctx->egl.height, 0);
@@ -486,6 +500,10 @@ static const EGLAttrib modifier_high_attribs[] = {
 _Static_assert(ARRAY_LENGTH(modifier_high_attribs) == MAX_PLANES, "modifier_high_attribs has incorrect length");
 
 bool dmabuf_to_texture(ctx_t * ctx, dmabuf_t * dmabuf) {
+    standalone_dmabuf_import_render(standalone, dmabuf);
+    standalone_dmabuf_import_dispatch(standalone);
+
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
     if (dmabuf->planes > MAX_PLANES) {
         log_error("egl::dmabuf_to_texture(): too many planes, got %zd, can support at most %d\n", dmabuf->planes, MAX_PLANES);
         return false;
@@ -567,6 +585,7 @@ bool dmabuf_to_texture(ctx_t * ctx, dmabuf_t * dmabuf) {
 // --- cleanup_egl ---
 
 void cleanup_egl(ctx_t *ctx) {
+    eglMakeCurrent(ctx->egl.display, ctx->egl.surface, ctx->egl.surface, ctx->egl.context);
     if (!ctx->egl.initialized) return;
 
     log_debug(ctx, "egl::cleanup(): destroying EGL objects\n");
